@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+setup.py
+interval/__init__.py
+interval/interval.c
+interval/interval.h
+interval/interval.py
+interval/numpy_interval.c
+npinterval.egg-info/PKG-INFO
+npinterval.egg-info/SOURCES.txt
+npinterval.egg-info/dependency_links.txt
+npinterval.egg-info/top_level.txt
