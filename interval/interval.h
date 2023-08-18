@@ -336,6 +336,15 @@ static inline interval interval_intersection(interval i1, interval i2){
     return (interval) { rl, ru };
 }
 
+static inline interval interval_minimum (interval i1, interval i2) {
+    return (interval) { fmin(i1.l, i2.l), fmin(i1.u, i2.u) };
+}
+
+static inline interval interval_maximum (interval i1, interval i2) {
+    return (interval) { fmax(i1.l, i2.l), fmax(i1.u, i2.u) };
+}
+
+
 /**
  * UTILITY
 */
@@ -366,14 +375,6 @@ static inline int interval_supset(interval i1, interval i2) {
     return (i2.l > i1.l && i2.u < i1.u);
 }
 
-
-static inline interval interval_minimum (interval i1, interval i2) {
-    return (interval) {fmin(i1.l, i2.l), fmin(i1.u, i2.u)};
-}
-
-static inline interval interval_maximum (interval i1, interval i2) {
-    return (interval) {fmax(i1.l, i2.l), fmax(i1.u, i2.u)};
-}
 
 #ifdef __cplusplus
 }

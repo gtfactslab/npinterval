@@ -201,8 +201,8 @@ pyinterval_positive(PyObject* self, PyObject* NPY_UNUSED(b)) {
 
 II_BINARY_INTERVAL_RETURNER(union)
 II_BINARY_INTERVAL_RETURNER(intersection)
-II_BINARY_INTERVAL_RETURNER(minimum)
 II_BINARY_INTERVAL_RETURNER(maximum)
+II_BINARY_INTERVAL_RETURNER(minimum)
 
 #define II_IS_SI_BINARY_INTERVAL_RETURNER_FULL(fake_name, name)         \
 static PyObject*                                                        \
@@ -1367,14 +1367,12 @@ PyMODINIT_FUNC initnumpy_interval(void) {
   REGISTER_UFUNC(true_divide);
   REGISTER_UFUNC(floor_divide);
   REGISTER_UFUNC(matmul);
+  REGISTER_UFUNC(maximum);
+  REGISTER_UFUNC(minimum);
   REGISTER_NEW_UFUNC(union, 2, 1, 
                      "Return the union of intervals");
   REGISTER_NEW_UFUNC(intersection, 2, 1, 
                      "Return the intersection of intervals");
-  REGISTER_NEW_UFUNC(maximum, 2, 1, 
-                     "Return the maximum of intervals");
-  REGISTER_NEW_UFUNC(minimum, 2, 1, 
-                     "Return the minimum of intervals");
 
   // double, interval -> interval
   arg_types[0] = NPY_DOUBLE;
