@@ -291,12 +291,12 @@ static inline interval interval_cos(interval i){
     return interval_sin((interval){ i.l+M_PI/2, i.u+M_PI/2 });
 }
 static inline interval interval_tan(interval i){
-    double diff = i.u - i.l;
-    if (diff >= 2*M_PI) {
+    int div = (int) ((i.u + M_PI_2) / (M_PI));
+    i.l -= div*M_PI; i.u -= div*M_PI;
+
+    if (i.l < -M_PI_2) {
         return (interval) { -INFINITY, INFINITY };
     }
-    int div = (int) (i.u / (2*M_PI));
-    i.l -= div*2*M_PI; i.u -= div*2*M_PI;
 
     return (interval){ tan(i.l), tan(i.u) };
 }
