@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "numpy"]
+requires = ["setuptools", "numpy<2"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
@@ -8,6 +8,8 @@ packages = ["interval"]
 [project]
 name = "npinterval"  # as it would appear on PyPI
 version = "0.0.1"
-dependencies = [ ]
+dependencies = [
+    "numpy<2"
+]
 
 
