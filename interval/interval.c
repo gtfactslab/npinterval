@@ -1,2 +1,1 @@
-// #include "interval.h"
-// #include "math.h"
+/* Replaced by interval.hpp (Boost.Interval-based C++ implementation). */
