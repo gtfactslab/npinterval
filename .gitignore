@@ -1,0 +1,6 @@
+build
+interval/__pycache__
+interval/*.so
+npinterval.egg-info
+.pytest_cache
+tests/__pycache__

@@ -73,5 +73,5 @@ def has_nan(iarray):
     l, u = get_lu(iarray)
     return numpy.any(numpy.isnan(l)) or numpy.any(numpy.isnan(u))
 
-zero = numpy.interval(0, 0)
-one  = numpy.interval(1, 1)
+zero = numpy.interval(0, 0, exact=True)
+one  = numpy.interval(1, 1, exact=True)
