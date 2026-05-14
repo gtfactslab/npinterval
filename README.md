@@ -1,6 +1,6 @@
 # npinterval
 
-Interval arithmetic as a NumPy 2 dtype, backed by
+Interval arithmetic as a NumPy dtype, backed by
 [Boost.Interval](https://www.boost.org/doc/libs/release/libs/numeric/interval/)
 for rigorous directed rounding.
 
@@ -9,7 +9,7 @@ Intervals are printed as `⟦lower, upper⟧`.
 ## Requirements
 
 - Python ≥ 3.8
-- NumPy ≥ 2.0
+- NumPy (1.x and 2.x both supported)
 - Boost headers (`libboost-dev` on Debian/Ubuntu, `brew install boost` on macOS, or `conda install -c conda-forge boost-cpp`)
 
 ## Installation

@@ -1,4 +1,4 @@
-"""Unit tests for the npinterval (numpy 2 / Boost.Interval) dtype."""
+"""Unit tests for the npinterval (Boost.Interval-backed) dtype."""
 
 import math
 import pickle
@@ -169,6 +169,57 @@ class TestInplace:
         a = np.interval(5.0, 7.0, exact=True)
         a -= 1.0
         assert a.l <= 4.0 and a.u >= 6.0
+
+
+# ---------------------------------------------------------------------------
+# Scalar interval combined with non-interval numeric arrays
+# (regression: the manual `*(int*)src` cast in the array-operator macro
+# truncated int64 → int32, and the `*(double*)src` cast misread float32.)
+# ---------------------------------------------------------------------------
+
+class TestScalarOpNonIntervalArray:
+    def test_add_int64_array_above_2_31(self):
+        a = np.interval(0.0, exact=True)
+        big = 1 << 40  # 1_099_511_627_776 — overflows int32
+        arr = np.array([1, 2, big], dtype=np.int64)
+        out = a + arr
+        for i, v in enumerate(arr):
+            assert out[i].l <= float(v) <= out[i].u
+
+    def test_multiply_int64_array_above_2_31(self):
+        a = np.interval(1.0, exact=True)
+        big = 1 << 40
+        out = a * np.array([big], dtype=np.int64)
+        assert out[0].l <= float(big) <= out[0].u
+
+    def test_subtract_int32_array(self):
+        a = np.interval(100.0, exact=True)
+        arr = np.array([-3, 5, 10], dtype=np.int32)
+        out = a - arr
+        for i, v in enumerate(arr):
+            assert out[i].l <= 100.0 - float(v) <= out[i].u
+
+    def test_divide_int16_array(self):
+        a = np.interval(12.0, exact=True)
+        arr = np.array([2, 3, 4], dtype=np.int16)
+        out = a / arr
+        for i, v in enumerate(arr):
+            assert out[i].l <= 12.0 / float(v) <= out[i].u
+
+    def test_add_float32_array(self):
+        # Regression: the float branch did `*(double*)src` on a float32
+        # source, straddling two elements.
+        a = np.interval(0.0, exact=True)
+        arr = np.array([0.5, 1.5, 2.5], dtype=np.float32)
+        out = a + arr
+        for i, v in enumerate(arr):
+            assert out[i].l <= float(v) <= out[i].u
+
+    def test_unsupported_dtype_raises_typeerror(self):
+        a = np.interval(0.0, exact=True)
+        arr = np.array([1 + 2j], dtype=np.complex64)
+        with pytest.raises(TypeError):
+            _ = a + arr
 
 
 # ---------------------------------------------------------------------------

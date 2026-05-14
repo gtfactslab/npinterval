@@ -236,27 +236,51 @@ pyinterval_##fake_name##_array_operator(PyObject* a, PyObject* b) {    \
   npy_uint32 flags;                                                     \
   npy_uint32 op_flags[2];                                               \
   PyArray_Descr *op_dtypes[2];                                          \
+  PyArray_Descr *double_descr = NULL;                                   \
   npy_intp itemsize, *innersizeptr, innerstride;                        \
   char **dataptrarray;                                                  \
   char *src, *dst;                                                      \
   interval p = {0.0, 0.0};                                             \
+  int b_is_interval;                                                    \
   PyInterval_AsInterval(p, a);                                         \
+  b_is_interval = PyArray_EquivTypes(                                   \
+      PyArray_DESCR((PyArrayObject*) b), interval_descr);              \
+  if (!b_is_interval &&                                                 \
+      !PyArray_ISFLOAT((PyArrayObject*) b) &&                          \
+      !PyArray_ISINTEGER((PyArrayObject*) b)) {                        \
+    PyErr_SetString(PyExc_TypeError,                                    \
+                    "Array operand must be interval, float, or integer dtype"); \
+    return NULL;                                                        \
+  }                                                                     \
+  /* For non-interval numeric operands we let NpyIter cast the source   \
+     into a float64 buffer (requires NPY_ITER_BUFFERED). The previous   \
+     manual `*(int*)src` cast truncated int64 → int32; routing through  \
+     NpyIter's casting handles every int / float width correctly. */    \
   flags = NPY_ITER_EXTERNAL_LOOP;                                       \
+  if (!b_is_interval) flags |= NPY_ITER_BUFFERED;                       \
   op[0] = (PyArrayObject *) b;                                         \
   op[1] = NULL;                                                         \
   op_flags[0] = NPY_ITER_READONLY;                                      \
   op_flags[1] = NPY_ITER_WRITEONLY | NPY_ITER_ALLOCATE;                \
-  op_dtypes[0] = PyArray_DESCR((PyArrayObject*) b);                    \
+  if (b_is_interval) {                                                  \
+    op_dtypes[0] = interval_descr;                                      \
+  } else {                                                              \
+    double_descr = PyArray_DescrFromType(NPY_DOUBLE);                  \
+    if (!double_descr) return NULL;                                     \
+    op_dtypes[0] = double_descr;                                        \
+  }                                                                     \
   op_dtypes[1] = interval_descr;                                       \
-  iter = NpyIter_MultiNew(2, op, flags, NPY_KEEPORDER, NPY_NO_CASTING, \
+  iter = NpyIter_MultiNew(2, op, flags, NPY_KEEPORDER,                 \
+                          b_is_interval ? NPY_NO_CASTING : NPY_SAFE_CASTING, \
                           op_flags, op_dtypes);                         \
+  Py_XDECREF(double_descr);                                             \
   if (iter == NULL) { return NULL; }                                    \
   iternext = NpyIter_GetIterNext(iter, NULL);                          \
   innerstride = NpyIter_GetInnerStrideArray(iter)[0];                  \
   itemsize = (npy_intp)sizeof(interval); /* output is always interval */\
   innersizeptr = NpyIter_GetInnerLoopSizePtr(iter);                    \
   dataptrarray = NpyIter_GetDataPtrArray(iter);                        \
-  if (PyArray_EquivTypes(PyArray_DESCR((PyArrayObject*) b), interval_descr)) { \
+  if (b_is_interval) {                                                  \
     npy_intp ii;                                                        \
     do {                                                                \
       npy_intp size = *innersizeptr;                                   \
@@ -264,25 +288,14 @@ pyinterval_##fake_name##_array_operator(PyObject* a, PyObject* b) {    \
       for (ii = 0; ii < size; ii++, src += innerstride, dst += itemsize) \
         *((interval *) dst) = interval_##name(p, *((interval *) src)); \
     } while (iternext(iter));                                           \
-  } else if (PyArray_ISFLOAT((PyArrayObject*) b)) {                    \
-    npy_intp ii;                                                        \
-    do {                                                                \
-      npy_intp size = *innersizeptr;                                   \
-      src = dataptrarray[0]; dst = dataptrarray[1];                    \
-      for (ii = 0; ii < size; ii++, src += innerstride, dst += itemsize) \
-        *(interval *) dst = interval_##name##_scalar(p, *((double *) src)); \
-    } while (iternext(iter));                                           \
-  } else if (PyArray_ISINTEGER((PyArrayObject*) b)) {                  \
-    npy_intp ii;                                                        \
-    do {                                                                \
-      npy_intp size = *innersizeptr;                                   \
-      src = dataptrarray[0]; dst = dataptrarray[1];                    \
-      for (ii = 0; ii < size; ii++, src += innerstride, dst += itemsize) \
-        *((interval *) dst) = interval_##name##_scalar(p, (double)*((int *) src)); \
-    } while (iternext(iter));                                           \
   } else {                                                              \
-    NpyIter_Deallocate(iter);                                           \
-    return NULL;                                                        \
+    npy_intp ii;                                                        \
+    do {                                                                \
+      npy_intp size = *innersizeptr;                                   \
+      src = dataptrarray[0]; dst = dataptrarray[1];                    \
+      for (ii = 0; ii < size; ii++, src += innerstride, dst += itemsize) \
+        *((interval *) dst) = interval_##name##_scalar(p, *((double *) src)); \
+    } while (iternext(iter));                                           \
   }                                                                     \
   ret = (PyObject *) NpyIter_GetOperandArray(iter)[1];                 \
   Py_INCREF(ret);                                                       \

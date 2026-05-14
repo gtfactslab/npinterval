@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "numpy>=2.0"]
+requires = ["setuptools", "numpy"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
@@ -9,7 +9,7 @@ packages = ["interval"]
 name = "npinterval"
 version = "0.0.2"
 dependencies = [
-    "numpy>=2.0",
+    "numpy",
 ]
 
 # Boost.Interval is a header-only C++ library and is not a Python package,
