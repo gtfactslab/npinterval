@@ -1,5 +1,6 @@
-// NumPy custom dtype for interval arithmetic, backed by Boost.Interval.
-// Supports NumPy 1.x and >= 2.0 via NPY_2_0_API_VERSION guards.
+// numpy_interval.cpp  —  NumPy custom dtype for interval arithmetic
+// Supports NumPy 1.x and NumPy >= 2.0 via compile-time version guards.
+// Interval math is provided by Boost.Interval (interval.hpp).
 
 #include <Python.h>
 #include "structmember.h"
@@ -11,21 +12,37 @@
 
 #include "interval.hpp"
 
+// Compat: access ArrFuncs from a descriptor.
 // In NumPy 2, descr->f is no longer a public field.
 #ifdef NPY_2_0_API_VERSION
 #  define DESCR_ARRFUNCS(d) PyDataType_GetArrFuncs(d)
-#  define NPY_GE_2 1
 #else
 #  define DESCR_ARRFUNCS(d) ((d)->f)
+#endif
+
+// ----------------------------------------------------------------
+// NumPy version compatibility macros
+// NPY_2_0_API_VERSION is only defined when building against NumPy 2+
+// ----------------------------------------------------------------
+#ifdef NPY_2_0_API_VERSION
+#  define NPY_GE_2 1
+#else
 #  define NPY_GE_2 0
 #endif
 
+// ----------------------------------------------------------------
+// PyInterval — the Python scalar type wrapping interval
+// ----------------------------------------------------------------
 typedef struct {
     PyObject_HEAD
     interval obval;
 } PyInterval;
 
+// Forward declaration using extern so C++ treats it as a declaration, not a definition.
+// The full definition appears later in the file (after the method/member tables).
 extern PyTypeObject PyInterval_Type;
+
+// Global descriptor pointer (set during module init)
 PyArray_Descr* interval_descr = NULL;
 
 static inline int
@@ -58,15 +75,20 @@ PyInterval_FromInterval(interval q) {
     return NULL;                                                        \
   }
 
+// ----------------------------------------------------------------
+// tp_new / tp_init
+// ----------------------------------------------------------------
 static PyObject*
 pyinterval_new(PyTypeObject* type, PyObject* NPY_UNUSED(args), PyObject* NPY_UNUSED(kwds))
 {
-    return (PyObject*)type->tp_alloc(type, 0);
+    PyInterval* self = (PyInterval*)type->tp_alloc(type, 0);
+    return (PyObject*)self;
 }
 
 static int
 pyinterval_init(PyObject* self, PyObject* args, PyObject* kwds)
 {
+    // kwlist for 1-arg and 2-arg forms (positional slots + keyword-only "exact")
     static const char* kwlist1[] = {"", "exact", NULL};
     static const char* kwlist2[] = {"", "", "exact", NULL};
     interval* i = &(((PyInterval*)self)->obval);
@@ -80,7 +102,9 @@ pyinterval_init(PyObject* self, PyObject* args, PyObject* kwds)
         return 0;
 
     } else if (size == 1) {
-        // Copy form: interval(other_interval) preserves bounds exactly.
+        // Interval copy: preserve bounds exactly, no widening
+        // (otherwise interval(a) for an interval `a` would drift the bounds
+        // on every copy, which is the same hazard the pickle fix addresses.)
         if (PyArg_ParseTuple(args, "O", &I) && PyInterval_Check(I)) {
             i->l = ((PyInterval*)I)->obval.l;
             i->u = ((PyInterval*)I)->obval.u;
@@ -94,6 +118,8 @@ pyinterval_init(PyObject* self, PyObject* args, PyObject* kwds)
         if (exact) {
             i->l = i->u = x;
         } else {
+            // Single-value form: produce the smallest representable interval
+            // around `x`, namely (prev(x), next(x)). Width is one or two ULPs.
             i->l = std::nextafter(x, -std::numeric_limits<double>::infinity());
             i->u = std::nextafter(x, +std::numeric_limits<double>::infinity());
         }
@@ -107,6 +133,7 @@ pyinterval_init(PyObject* self, PyObject* args, PyObject* kwds)
         if (exact) {
             i->l = l;  i->u = u;
         } else {
+            // Two-value form: widen each bound outward by one ULP.
             i->l = std::nextafter(l, -std::numeric_limits<double>::infinity());
             i->u = std::nextafter(u, +std::numeric_limits<double>::infinity());
         }
@@ -118,7 +145,9 @@ pyinterval_init(PyObject* self, PyObject* args, PyObject* kwds)
     return -1;
 }
 
-// ---- method wrapper macros ----
+// ----------------------------------------------------------------
+// Unary / binary return helpers
+// ----------------------------------------------------------------
 #define UNARY_BOOL_RETURNER(name)                                       \
   static PyObject*                                                      \
   pyinterval_##name(PyObject* a, PyObject* NPY_UNUSED(b)) {            \
@@ -194,7 +223,9 @@ II_BINARY_INTERVAL_RETURNER(intersection)
 II_BINARY_INTERVAL_RETURNER(maximum)
 II_BINARY_INTERVAL_RETURNER(minimum)
 
-// ---- arithmetic operators: interval op {interval, scalar, array} ----
+// ----------------------------------------------------------------
+// Arithmetic operators (interval op interval/scalar)
+// ----------------------------------------------------------------
 #define II_IS_SI_BINARY_INTERVAL_RETURNER_FULL(fake_name, name)         \
 static PyObject*                                                        \
 pyinterval_##fake_name##_array_operator(PyObject* a, PyObject* b) {    \
@@ -303,7 +334,9 @@ II_IS_SI_BINARY_INTERVAL_RETURNER(subtract)
 II_IS_SI_BINARY_INTERVAL_RETURNER(multiply)
 II_IS_SI_BINARY_INTERVAL_RETURNER(divide)
 
-// ---- in-place arithmetic ----
+// ----------------------------------------------------------------
+// In-place arithmetic operators
+// ----------------------------------------------------------------
 #define II_IS_SI_BINARY_INTERVAL_INPLACE_FULL(fake_name, name)          \
   static PyObject*                                                       \
   pyinterval_inplace_##fake_name(PyObject* a, PyObject* b) {            \
@@ -334,7 +367,9 @@ II_IS_SI_BINARY_INTERVAL_INPLACE(subtract)
 II_IS_SI_BINARY_INTERVAL_INPLACE(multiply)
 II_IS_SI_BINARY_INTERVAL_INPLACE(divide)
 
-// ---- power: interval ** scalar ----
+// ----------------------------------------------------------------
+// Power (interval ** scalar)
+// ----------------------------------------------------------------
 static PyObject*
 pyinterval_power(PyObject* a, PyObject* b) {
     interval i = {0.0, 0.0};
@@ -368,7 +403,14 @@ pyinterval_inplace_power(PyObject* a, PyObject* b) {
     Py_RETURN_NOTIMPLEMENTED;
 }
 
-// ---- pickle: 3-tuple form so __setstate__ restores bounds without widening ----
+// ----------------------------------------------------------------
+// Pickle support
+//
+// Uses the 3-tuple __reduce__ form (cls, args, state) so the bounds round-trip
+// exactly. Reconstructing through the regular `interval(l, u)` constructor
+// would re-widen by ±1 ULP — instead the empty args build a zero interval and
+// __setstate__ writes the saved (l, u) directly.
+// ----------------------------------------------------------------
 static PyObject*
 pyinterval__reduce(PyInterval* self)
 {
@@ -382,6 +424,7 @@ pyinterval_getstate(PyInterval* self, PyObject* NPY_UNUSED(args))
     return Py_BuildValue("(dd)", self->obval.l, self->obval.u);
 }
 
+// METH_O: state is passed as a single (l, u) tuple, not a *args wrapper.
 static PyObject*
 pyinterval_setstate(PyInterval* self, PyObject* state)
 {
@@ -396,7 +439,9 @@ pyinterval_setstate(PyInterval* self, PyObject* state)
     Py_RETURN_NONE;
 }
 
-// ---- method table ----
+// ----------------------------------------------------------------
+// Method table
+// ----------------------------------------------------------------
 static PyMethodDef pyinterval_methods[] = {
     {"nonzero",      pyinterval_nonzero,      METH_O,       "True if the interval is PRECISELY nonzero"},
     {"equal",        pyinterval_equal,        METH_O,       "True if the intervals are PRECISELY equal"},
@@ -536,7 +581,9 @@ static PyGetSetDef pyinterval_getset[] = {
     {NULL, NULL, NULL, NULL, NULL}
 };
 
-// ---- hash / repr ----
+// ----------------------------------------------------------------
+// Hash
+// ----------------------------------------------------------------
 #if PY_VERSION_HEX > 0x030a00a6
 #  define _itvl_HashDouble _Py_HashDouble
 #else
@@ -594,7 +641,9 @@ pyinterval_str(PyObject* o)
     return pyinterval_repr(o);
 }
 
-// ---- PyInterval_Type ----
+// ----------------------------------------------------------------
+// PyInterval_Type definition
+// ----------------------------------------------------------------
 PyTypeObject PyInterval_Type = {
     PyVarObject_HEAD_INIT(NULL, 0)
     "interval.interval",                       // tp_name
@@ -633,7 +682,9 @@ PyTypeObject PyInterval_Type = {
     pyinterval_new,                            // tp_new
 };
 
-// ---- ArrFuncs (per-dtype array hooks) ----
+// ----------------------------------------------------------------
+// Array functions (ArrFuncs)
+// ----------------------------------------------------------------
 static PyArray_ArrFuncs _PyInterval_ArrFuncs;
 
 static npy_bool
@@ -735,7 +786,9 @@ INTERVAL_dot(void* ip0_, npy_intp is0, void* ip1_, npy_intp is1,
 }
 #endif
 
-// ---- cast functions (NumPy < 2 only) ----
+// ----------------------------------------------------------------
+// Cast functions  (NumPy < 2 only — removed in NumPy 2)
+// ----------------------------------------------------------------
 #if !NPY_GE_2
 #define MAKE_T_TO_INTERVAL(TYPE, type)                                  \
   static void                                                           \
@@ -773,7 +826,13 @@ register_cast_function(int sourceType, int destType, PyArray_VectorUnaryFunc* ca
 }
 #endif // !NPY_GE_2
 
-// ---- unary ufuncs ----
+// ----------------------------------------------------------------
+// UFuncs — unary
+// ----------------------------------------------------------------
+// For signature (interval,) -> (T,): apply interval_<func_name> elementwise
+// along the contiguous axis. ip1, op1 are byte pointers; is1, os1 are byte
+// strides (not necessarily sizeof(interval) — see the strides discussion at
+// interval_matmul). n is the loop length, supplied by NumPy.
 #define UNARY_GEN_UFUNC(ufunc_name, func_name, ret_type)                \
   static void                                                           \
   interval_##ufunc_name##_ufunc(char** args, npy_intp const* dimensions, \
@@ -810,7 +869,14 @@ interval_positive_ufunc(char** args, npy_intp const* dimensions,
         *((interval*)op1) = *(interval*)ip1;
 }
 
-// ---- binary ufuncs ----
+// ----------------------------------------------------------------
+// UFuncs — binary
+// ----------------------------------------------------------------
+// Same elementwise-loop pattern as the unary form, with three byte pointers
+// (two inputs + one output) and three independent strides. BINARY_UFUNC
+// specialises both inputs to interval; BINARY_SCALAR_UFUNC generates two
+// loops per operation — (interval, double) and (double, interval) — so the
+// scalar can appear on either side of the operator.
 #define BINARY_GEN_UFUNC(ufunc_name, func_name, arg_type1, arg_type2, ret_type) \
   static void                                                           \
   interval_##ufunc_name##_ufunc(char** args, npy_intp const* dimensions, \
@@ -856,7 +922,14 @@ BINARY_UFUNC(intersection, interval)
 BINARY_UFUNC(maximum,      interval)
 BINARY_UFUNC(minimum,      interval)
 
-// ---- matmul (generalized ufunc) ----
+// ----------------------------------------------------------------
+// Matmul generalized ufunc
+// ----------------------------------------------------------------
+// Implements the gufunc with signature  (M,N),(N,P)->(M,P), i.e.
+//     C[m, p] = Σ_{k=0..N-1}  A[m, k] · B[k, p]
+// where each multiply / add is a directed-rounded interval operation, so the
+// result element is a sound (but not necessarily tight) enclosure of the
+// matrix product over all real-number representatives of the operands.
 static NPY_INLINE void
 interval_matmul(char** args, npy_intp const* dimensions, npy_intp const* steps)
 {
@@ -868,6 +941,7 @@ interval_matmul(char** args, npy_intp const* dimensions, npy_intp const* steps)
 
     for (npy_intp m = 0; m < dm; m++) {
         for (npy_intp p = 0; p < dp; p++) {
+            // dot product of row m of ip1 with column p of ip2
             interval r = {0.0, 0.0};
             for (npy_intp k = 0; k < dn; k++) {
                 r = interval_add(r,
@@ -881,6 +955,11 @@ interval_matmul(char** args, npy_intp const* dimensions, npy_intp const* steps)
     }
 }
 
+// Outer wrapper: broadcasts over the leading "stack" axis dN. For inputs
+// of shape (K, M, N) @ (K, N, P) the wrapper iterates K matrix products,
+// advancing each operand pointer by its per-matrix stride (steps[0..2]),
+// and delegates each inner product to interval_matmul (which consumes the
+// remaining six core strides at steps[3..8]).
 static void
 interval_matmul_ufunc(char** args, npy_intp const* dimensions,
                       npy_intp const* steps, void* NPY_UNUSED(func))
@@ -891,7 +970,9 @@ interval_matmul_ufunc(char** args, npy_intp const* dimensions,
         interval_matmul(args, dimensions + 1, steps + 3);
 }
 
-// ---- module methods / alignment ----
+// ----------------------------------------------------------------
+// Module methods and alignment info
+// ----------------------------------------------------------------
 static PyMethodDef IntervalMethods[] = {
     {NULL, NULL, 0, NULL}
 };
@@ -900,7 +981,9 @@ static int interval_elsize = sizeof(interval);
 typedef struct { char c; interval q; } align_test;
 static int interval_alignment = (int)offsetof(align_test, q);
 
-// ---- module init ----
+// ----------------------------------------------------------------
+// Module definition
+// ----------------------------------------------------------------
 static struct PyModuleDef moduledef = {
     PyModuleDef_HEAD_INIT,
     "numpy_interval",
@@ -954,9 +1037,13 @@ PyInit_numpy_interval(void)
     _PyInterval_ArrFuncs.dotfunc      = (PyArray_DotFunc*)INTERVAL_dot;
 #endif
 
-    // Register the dtype. NumPy 2 uses an opaque PyArray_DescrProto;
-    // NumPy 1 fills PyArray_Descr directly.
+    // ----------------------------------------------------------------
+    // Register the dtype descriptor
+    // In NumPy >= 2: PyArray_Descr is opaque; use PyArray_DescrProto.
+    // In NumPy <  2: fill PyArray_Descr directly via PyObject_New.
+    // ----------------------------------------------------------------
 #ifdef NPY_2_0_API_VERSION
+    // NumPy 2.0+ path
     static PyArray_DescrProto interval_descr_proto;
     memset(&interval_descr_proto, 0, sizeof(interval_descr_proto));
     interval_descr_proto.typeobj   = &PyInterval_Type;
@@ -969,8 +1056,8 @@ PyInit_numpy_interval(void)
     interval_descr_proto.alignment = interval_alignment;
     interval_descr_proto.f         = &_PyInterval_ArrFuncs;
 
-    // PyArray_DescrProto has PyObject_HEAD; must be Python-initialized before
-    // PyArray_RegisterDataType.
+    // PyArray_DescrProto has PyObject_HEAD, so we must initialize it as a
+    // Python object before calling PyArray_RegisterDataType.
     PyObject_INIT((PyObject*)&interval_descr_proto, &PyArrayDescr_Type);
 
     Py_INCREF(&PyInterval_Type);
@@ -981,6 +1068,7 @@ PyInit_numpy_interval(void)
     interval_descr = PyArray_DescrFromType(intervalNum);
     if (!interval_descr) { INITERROR; }
 #else
+    // NumPy 1.x path
     interval_descr = PyObject_New(PyArray_Descr, &PyArrayDescr_Type);
     interval_descr->typeobj   = &PyInterval_Type;
     interval_descr->kind      = 'V';
@@ -1002,7 +1090,9 @@ PyInit_numpy_interval(void)
     if (intervalNum < 0) { INITERROR; }
 #endif
 
-    // Cast functions (NumPy 1 only — removed in NumPy 2).
+    // ----------------------------------------------------------------
+    // Register cast functions (removed in NumPy 2)
+    // ----------------------------------------------------------------
 #if !NPY_GE_2
     register_cast_function(NPY_BOOL,      intervalNum, (PyArray_VectorUnaryFunc*)BOOL_to_interval);
     register_cast_function(NPY_BYTE,      intervalNum, (PyArray_VectorUnaryFunc*)BYTE_to_interval);
@@ -1020,7 +1110,9 @@ PyInit_numpy_interval(void)
     register_cast_function(NPY_LONGDOUBLE,intervalNum, (PyArray_VectorUnaryFunc*)LONGDOUBLE_to_interval);
 #endif
 
-    // Register ufunc loops.
+    // ----------------------------------------------------------------
+    // Register ufunc loops
+    // ----------------------------------------------------------------
 #define REGISTER_UFUNC(name)                                            \
     PyUFunc_RegisterLoopForType(                                        \
         (PyUFuncObject*)PyDict_GetItemString(numpy_dict, #name),        \
